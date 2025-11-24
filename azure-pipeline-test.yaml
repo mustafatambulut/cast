@@ -1,0 +1,102 @@
+trigger: 
+  - development
+
+name: 1.1.$(Rev:r)
+
+variables:
+  - name: app-repo-deployments-folder
+    value: deployments/test
+
+  - name: helm-values-yaml-filename
+    value: values-stb-tod-tv-chromecast-aws-eks-test.yaml
+
+  - name: helm-chart-yaml-filename
+    value: Chart-test.yaml
+
+  - name: helm-base-repo-name
+    value: helm-base-common
+
+  - name: deployed-cluster-name
+    value: eks-tod2test-cluster
+
+  - name: buildConfiguration
+    value: Release
+
+  - name: appconfig-repo-url
+    value: "https://code.digiturk.net/STBCollection/STB.Tod.Tv.Chromecast/_git/STB.Tod.Tv.Chromecast"
+
+  - name: appconfig-repo-branch
+    value: "scm-devops"
+
+resources:
+  repositories:
+  - repository: Static-Tasks
+    type: git
+    name: Kubernetes-Operations/Static-Tasks
+    endpoint: stb-tod-tv-to-scm-collection
+    ref: master
+
+stages:
+  - stage: STB_Theatrical
+    jobs:
+      - job: STB_TOD_TV_Chromecast_Docker_Build_And_Push
+        pool: BeintrTest-Linux-Pool
+
+        steps:
+          - task: Uping.ShortGitVersionHashExtractor.ShortGitVersionHashExtractor.short-git-version-hash-extractor@1
+            displayName: 'Short git version hash extractor'
+
+          - task: AzureKeyVault@1
+            displayName: 'Get secrets from Azure Key Vault'
+            inputs:
+              azureSubscription: 'kv-prod-azuredevops'
+              KeyVaultName: 'kv-prod-azuredevops'
+              SecretsFilter: 'argo-username,argo-useremail,NexusUser,NexusPassword,ADGITAUTH,prismacloudaccesskeyid,prismacloudsecretkey'
+              RunAsPreJob: false
+          - task: PowerShell@2
+            inputs:
+              targetType: 'inline'
+              script: |
+                Get-ChildItem -File
+            
+          - task: Docker@2
+            displayName: build
+            inputs:
+              repository: 'tod2-test-chromecast'
+              command: 'build'
+              Dockerfile: 'Dockerfile'
+              tags: '$(ShortVersionHash)'
+            env:
+              DOCKER_BUILDKIT: '1'
+
+          - task: ECRPushImage@1
+            inputs:
+              awsCredentials: 'aws_beintod2test_ecr_usr'
+              regionName: 'me-south-1'
+              imageSource: 'imagename'
+              sourceImageName: 'tod2-test-chromecast'
+              sourceImageTag: '$(ShortVersionHash)'
+              repositoryName: 'tod2-test-chromecast'
+              pushTag: '$(ShortVersionHash)'
+              logRequest: true
+              logResponse: true
+
+
+          - template: tasks/helm-package-and-upload-v4.yaml@Static-Tasks
+            parameters:
+              GitAuthToken: $(ADGITAUTH)
+              GitConfigUsername: $(argo-username)
+              GitConfigUserEmail: $(argo-useremail)
+              NexusUsername: $(NexusUser)
+              NexusPassword: $(NexusPassword)
+              HelmBaseRepoName: $(helm-base-repo-name)
+              AppRepoDeploymentsFolder: $(app-repo-deployments-folder)
+              HelmChartYamlFilename: $(helm-chart-yaml-filename)
+              HelmValuesYamlFilename: $(helm-values-yaml-filename)
+              #HelmBaseRepoChartFolder: $(helm-base-repo-chart-folder)
+              DeployedClusterName: $(deployed-cluster-name) # either this or 'HelmBaseRepoChartFolder' should be set, defaults to false
+              UseSeparateAppConfigRepo: true  # Use a different repo to get Chart.yaml and values*.yaml
+              AppConfigRepoGitUrl: $(appconfig-repo-url)  # git https clone url
+              AppConfigRepoBranch: $(appconfig-repo-branch)
+              PrismaCloudAccessKeyId: $(prismacloudaccesskeyid)
+              PrismaCloudSecretKey: $(prismacloudsecretkey)

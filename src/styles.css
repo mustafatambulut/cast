@@ -1,0 +1,142 @@
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: Arial, sans-serif;
+  background-color: #000;
+  color: white;
+
+}
+
+#player-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 80vh;
+}
+
+.branding-screen {
+  width: 100%;
+}
+
+.branding-container {
+  text-align: center;
+  margin-top: 20px;
+}
+
+.playback-status {
+  text-align: center;
+  color: #ff0;
+}
+
+/* Branding container */
+.branding-container {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  height: 100vh;
+  text-align: center;
+}
+
+/* Header: User Info and Logo */
+.branding-header {
+  display: flex;
+  justify-content: space-between;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 60px 60px 0 60px;
+}
+
+.user-header {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  color: white;
+  font-size: 24px;
+  line-height: 36px;
+}
+
+.user-avatar {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+}
+
+.user-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  color: white;
+  font-size: 24px;
+  line-height: 36px;
+}
+
+.user-info strong {
+  font-size: 24px;
+}
+
+.branding-logo {
+  width: 120px;
+}
+
+/* Main Content */
+.branding-body {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: row;
+  justify-content: center;
+  align-items: center;
+}
+
+.branding-text {
+  text-align: left;
+  margin-left: 40px;
+  margin-bottom: 20px;
+}
+
+.branding-icon img {
+  width: 150px;
+  margin-bottom: 20px;
+}
+
+.ready-text {
+  font-size: 2.5em;
+  margin: 0;
+  font-weight: bold;
+}
+
+.description {
+  font-size: 1.2em;
+  color: #ccc;
+  margin-top: 10px;
+}
+
+/* Footer */
+.branding-footer {
+  margin-bottom: 20px;
+  color: #888;
+  font-size: 0.9em;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .branding-logo {
+    width: 80px;
+  }
+
+  .ready-text {
+    font-size: 2em;
+  }
+
+  .description {
+    font-size: 1em;
+  }
+
+  .user-avatar {
+    width: 80px;
+    height: 80px;
+  }
+}
