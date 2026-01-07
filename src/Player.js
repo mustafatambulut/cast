@@ -1,506 +1,634 @@
 /* global cast */
-import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
-import { Player as BitmovinPlayer, PlayerEvent } from 'bitmovin-player';
-import initChromecastMux from '@mux/mux-data-chromecast';
+import React, { useEffect, useRef, useState } from 'react';
+import videojs from 'video.js';
+import 'video.js/dist/video-js.css';
+import 'videojs-contrib-eme';
 import Branding from './Branding';
 
-const Player = ({ userData, message, bitmovinPlayerRef, sendMessageToMobile }) => {
-  console.warn("Player component rendered dev");
+// Detailed logging helper functions for Player
+const logPlayer = (category, message, data = null) => {
+  const timestamp = new Date().toISOString();
+  const logPrefix = `[${timestamp}] [PLAYER:${category}]`;
+  if (data !== null && data !== undefined) {
+    console.log(`${logPrefix} ${message}`, data);
+  } else {
+    console.log(`${logPrefix} ${message}`);
+  }
+};
+
+const logVideoJSEvent = (eventName, player) => {
+  logPlayer('VJS_EVENT', `========== ${eventName} ==========`);
+  if (player) {
+    logPlayer('VJS_EVENT', 'Current Time:', player.currentTime?.());
+    logPlayer('VJS_EVENT', 'Duration:', player.duration?.());
+    logPlayer('VJS_EVENT', 'Paused:', player.paused?.());
+    logPlayer('VJS_EVENT', 'Ready State:', player.readyState?.());
+    logPlayer('VJS_EVENT', 'Network State:', player.networkState?.());
+    logPlayer('VJS_EVENT', 'Buffered:', player.buffered?.()?.length > 0 ? {
+      start: player.buffered().start(0),
+      end: player.buffered().end(0)
+    } : 'No buffer');
+    logPlayer('VJS_EVENT', 'Volume:', player.volume?.());
+    logPlayer('VJS_EVENT', 'Muted:', player.muted?.());
+  }
+  logPlayer('VJS_EVENT', `========== END ${eventName} ==========`);
+};
+
+const logLoadRequest = (loadRequestData) => {
+  logPlayer('LOAD_REQUEST', '========== LOAD REQUEST FROM MOBILE ==========');
+  logPlayer('LOAD_REQUEST', 'Request ID:', loadRequestData?.requestId);
+  logPlayer('LOAD_REQUEST', 'Session ID:', loadRequestData?.sessionId);
+  logPlayer('LOAD_REQUEST', 'Media Info:', {
+    contentId: loadRequestData?.media?.contentId,
+    contentUrl: loadRequestData?.media?.contentUrl,
+    contentType: loadRequestData?.media?.contentType,
+    streamType: loadRequestData?.media?.streamType,
+    duration: loadRequestData?.media?.duration,
+    metadata: loadRequestData?.media?.metadata
+  });
+  logPlayer('LOAD_REQUEST', 'Custom Data:', loadRequestData?.media?.customData);
+  logPlayer('LOAD_REQUEST', 'Autoplay:', loadRequestData?.autoplay);
+  logPlayer('LOAD_REQUEST', 'Current Time:', loadRequestData?.currentTime);
+  logPlayer('LOAD_REQUEST', 'Active Track IDs:', loadRequestData?.activeTrackIds);
+  logPlayer('LOAD_REQUEST', 'Full Request Data:', JSON.stringify(loadRequestData, null, 2));
+  logPlayer('LOAD_REQUEST', '========== END LOAD REQUEST ==========');
+};
+
+const logDRMInfo = (customData) => {
+  logPlayer('DRM', '========== DRM CONFIGURATION ==========');
+  logPlayer('DRM', 'License Server URL:', customData?.licenseServerURL);
+  logPlayer('DRM', 'Media ID:', customData?.mediaId);
+  logPlayer('DRM', 'DRM Ticket Present:', !!customData?.drmTicket);
+  logPlayer('DRM', 'DRM Ticket Length:', customData?.drmTicket?.length || 0);
+  logPlayer('DRM', '========== END DRM CONFIGURATION ==========');
+};
+
+const Player = ({ userData }) => {
+  logPlayer('INIT', 'Player component rendered');
+  logPlayer('INIT', 'Received userData:', userData);
   const contextRef = useRef(null);
   if (!contextRef.current) {
     contextRef.current = cast.framework.CastReceiverContext.getInstance();
   }
   const context = contextRef.current;
   const playerManager = context.getPlayerManager();
-  
-  const playerElementRef = useRef(null);
+  const videoNode = useRef(null);
+  const player = useRef(null);
   const [showBranding, setShowBranding] = useState(true);
-  const [multiplayState, setMultiplayState] = useState(null);
-  const interval = useRef(null);
+  const [castingData, setCastingData] = useState({});
+ 
 
-  const PLAYER_KEY = process.env.PLAYER_KEY || '047DDDE8-7D3F-4355-959A-4DC51EC5B10E';
-  const MUX_ENV_KEY = process.env.REACT_APP_MUX_ENV_KEY || 'r5ovdkei484nkv476ga0nbnhh'; // Mux Environment Key
+  useEffect(() => {
+     const style = document.createElement('style');
+     style.textContent = `
+       .video-js .vjs-control-bar {
+         display: none !important;
+       }
+       .video-js .vjs-progress-control {
+         display: none !important;
+       }
+       .video-js .vjs-remaining-time {
+         display: none !important;
+       }
+     `;
+     document.head.appendChild(style);
+    if (player.current) return;
 
-  const playerConfig = useMemo(() => ({
-    key: PLAYER_KEY,
-    ui: false,
-    playback: {
+    if (videoNode.current && !player.current) {
+      playerManager.setMediaElement(videoNode.current);
+    }
+
+
+    logPlayer('VJS', 'Creating VideoJS player instance...');
+    const vjsPlayer = videojs(videoNode.current, {
+      controls: false,
       autoplay: false,
-      muted: false,
-    },
-    adaptation: {
-      preload: true
-    },
-    tweaks: {
-      max_buffer_level: 30,
-      native_fullscreen: true,
-      file_protocol: true
-    }
-  }), [PLAYER_KEY]);
-
-  const checkMultiplay = useCallback(async () => {
-    try {
-      if (!multiplayState || !multiplayState.token) {
-        console.info('No token available for multiplay check');
-        return;
-      }
-      
-      const response = await fetch('https://mobileservice.apac.beiniz.biz/api/play/check-multi-play', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json; charset=utf-8'
+      preload: 'auto',
+      techOrder: ['html5'],
+      html5: {
+        vhs: {
+          withCredentials: true,
+          overrideNative: true,
         },
-        credentials: 'include',
-        body: JSON.stringify({
-          Cookies: [
-            {
-              Key: "token",
-              Value: multiplayState.token
-            }
-          ]
-        })
+      },
+      loadingSpinner: false,
+    });
+    logPlayer('VJS', 'VideoJS player instance created');
+
+    // Comprehensive VideoJS event logging
+    vjsPlayer.on('playing', () => {
+      logVideoJSEvent('PLAYING', vjsPlayer);
+      logPlayer('VJS', '▶️ Video playing event fired - Current showBranding state:', showBranding);
+      setShowBranding(false);
+      logPlayer('VJS', 'showBranding set to false');
+    });
+
+    vjsPlayer.on('loadstart', () => {
+      logVideoJSEvent('LOADSTART', vjsPlayer);
+      logPlayer('VJS', '📥 Video loading started - showing branding overlay');
+      setShowBranding(true);
+    });
+    
+    vjsPlayer.on('loadedmetadata', () => {
+      logVideoJSEvent('LOADEDMETADATA', vjsPlayer);
+      logPlayer('VJS', '📋 Metadata loaded:', {
+        duration: vjsPlayer.duration(),
+        videoWidth: vjsPlayer.videoWidth(),
+        videoHeight: vjsPlayer.videoHeight()
       });
-      
-      // Response'u JSON olarak parse et
-      const data = await response.json();
-      
-      console.info('Multiplay check response:', data);
-      
-      // Başarısız yanıt durumunda (isSuccess=false) yayını sonlandır
-      if (!response.ok || (data && !data.isSuccess)) {
-        const errorCode = data?.message?.displayCode || 
-                          data?.errorCode || 
-                          data?.message?.code || 
-                          data?.code || 
-                          response.status;
-                          
-        const errorText = data?.message?.text || 'Multiplay error detected';
-        
-        console.error(`Multiplay check failed: ${errorText} (Code: ${errorCode})`);
-
-        if (bitmovinPlayerRef.current) {
-          bitmovinPlayerRef.current.unload();
-          console.info('Stream has been terminated due to multiplay check failure');
-        }
-        
-        if (interval.current) {
-          clearInterval(interval.current);
-          interval.current = null;
-        } 
-
-        setMultiplayState(null);
-        setShowBranding(true);
-      }
-    } catch (error) {
-      console.error('Failed to execute multiplay check:', error);
-    }
-  }, [multiplayState]);
-
-  useEffect(() => {
-    if (multiplayState && !interval.current) {
-      interval.current = setInterval(() => {
-        checkMultiplay();
-      }, 60000);
-    }
-  
-    return () => {
-      if (interval.current) {
-        clearInterval(interval.current);
-        interval.current = null;
-      }
-    };
-  }, [multiplayState, checkMultiplay]);
-
-  useEffect(() => {
-    if (bitmovinPlayerRef.current) return;
-
-    if (!playerElementRef.current) {
-      console.error("Player element is not ready yet");
-      return;
-    }
-
-    try {
-      const player = new BitmovinPlayer(playerElementRef.current, playerConfig);
-      
-      player.on(PlayerEvent.Play, () => {
-        console.info('Player Play');
-        setShowBranding(false);
-        
-        // Mobile cihaza oynatma başladı bilgisi gönder
-        if (sendMessageToMobile) {
-          sendMessageToMobile('player_event', {
-            event: 'play',
-            currentTime: player.getCurrentTime(),
-            duration: player.getDuration()
-          });
-        }
-      });
-      
-      player.on(PlayerEvent.SourceLoaded, () => {
-        console.info('Player SourceLoaded');
-        setShowBranding(true);
-        
-        // Mobile cihaza kaynak yüklendi bilgisi gönder
-        if (sendMessageToMobile) {
-          sendMessageToMobile('player_event', {
-            event: 'source_loaded',
-            duration: player.getDuration(),
-            source: player.getSource()
-          });
-        }
-      });
-      
-      player.on(PlayerEvent.Playing, () => {
-        console.info('Player Playing');
-        setShowBranding(false);
-        
-        // Mobile cihaza oynatma devam ediyor bilgisi gönder
-        if (sendMessageToMobile) {
-          sendMessageToMobile('player_event', {
-            event: 'playing',
-            currentTime: player.getCurrentTime(),
-            duration: player.getDuration()
-          });
-        }
-      });
-      
-      player.on(PlayerEvent.Error, (error) => {
-        console.info('Player Error', error);
-        
-        // Mobile cihaza hata bilgisi gönder
-        if (sendMessageToMobile) {
-          sendMessageToMobile('player_error', {
-            error: error.code || 'unknown_error',
-            message: error.message || 'An error occurred',
-            details: error
-          });
-        }
-      });
-
-      player.on(PlayerEvent.Warning, (warning) => {
-        console.info('Player Warning', warning);
-      });
-
-      player.on(PlayerEvent.DrmLicenseAdded, () => {
-        console.info('Player DrmLicenseAdded');
-      });
-
-      player.on(PlayerEvent.StallStarted, (event) => {
-        console.info('Player Stall Started', event);
-      });
-
-      player.on(PlayerEvent.StallEnded, () => {
-        console.info('Player Stall Ended');
-      });
-      
-      player.on(PlayerEvent.Seek, (event) => {
-        console.info('Player Seek', event);
-        
-        // Mobile cihaza seek olayı bilgisi gönder
-        if (sendMessageToMobile) {
-          sendMessageToMobile('player_event', {
-            event: 'seek',
-            seekTarget: event.seekTarget,
-            currentTime: player.getCurrentTime(),
-            duration: player.getDuration()
-          });
-        }
-      });
-      
-      player.on(PlayerEvent.Seeked, (event) => {
-        console.info('Player Seeked', event);
-        
-        // Mobile cihaza seek tamamlandı bilgisi gönder
-        if (sendMessageToMobile) {
-          sendMessageToMobile('player_event', {
-            event: 'seeked',
-            currentTime: player.getCurrentTime(),
-            duration: player.getDuration()
-          });
-        }
-      });
-      
-      player.on(PlayerEvent.TimeChanged, (event) => {
-        // Düzenli progress bilgilerini mobil cihaza gönder (her saniye)
-        const currentTime = event.time;
-        const duration = player.getDuration();
-        const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
-        
-        // Mobile cihaza detaylı progress bilgisi gönder (RemoteMediaClient uyumlu)
-        if (sendMessageToMobile) {
-          sendMessageToMobile('media_progress', {
-            currentTime: currentTime,
-            duration: duration,
-            progress: progress, // Yüzde olarak progress
-            bufferedTime: player.getTimeShift() || 0,
-            isPlaying: !player.isPaused(),
-            timestamp: Date.now(),
-            // Android RemoteMediaClient için ek bilgiler
-            mediaInfo: {
-              currentTime: Math.floor(currentTime * 1000), // milisaniye cinsinden
-              duration: Math.floor(duration * 1000), // milisaniye cinsinden
-              playbackRate: 1.0,
-              playerState: player.isPaused() ? 'PAUSED' : 'PLAYING'
-            }
-          });
-        }
-      });
-      
-      player.on(PlayerEvent.Paused, () => {
-        console.info('Player Paused');
-        setShowBranding(true);
-        
-        // Mobile cihaza duraklatıldı bilgisi gönder
-        if (sendMessageToMobile) {
-          sendMessageToMobile('player_event', {
-            event: 'paused',
-            currentTime: player.getCurrentTime(),
-            duration: player.getDuration()
-          });
-        }
-      });
-      
-      player.on(PlayerEvent.PlaybackFinished, () => {
-        console.info('Player Playback Finished');
-        setShowBranding(true);
-        
-        // Mobile cihaza oynatma bitti bilgisi gönder
-        if (sendMessageToMobile) {
-          sendMessageToMobile('player_event', {
-            event: 'ended',
-            currentTime: player.getCurrentTime(),
-            duration: player.getDuration()
-          });
-        }
-      });
-      
-      bitmovinPlayerRef.current = player;
-
-      playerManager.setMessageInterceptor(
-        cast.framework.messages.MessageType.LOAD,
-        (loadRequestData) => handleLoadRequest(loadRequestData, player)
-      );
-    } catch (error) {
-      console.error('Failed to initialize player:', error);
-    }
-
-    return () => {
-      if (bitmovinPlayerRef.current) {
-        bitmovinPlayerRef.current.destroy();
-        bitmovinPlayerRef.current = null;
-      }
-    };
-  }, [playerConfig, playerManager]);
-
-  useEffect(()=>{
-    console.info('Message geldi. Player.js de',message)
-  },[message])
-
-  const handleLoadRequest = async (loadRequestData, player) => {
-    console.log("LOAD request received on Receiver:", loadRequestData);
-
-    if (!loadRequestData?.media?.contentId) {
-      console.error("Invalid media request or missing contentId.");
-      
-      // Mobile cihaza hata bilgisi gönder
-      if (sendMessageToMobile) {
-        sendMessageToMobile('load_error', {
-          error: 'missing_content_id',
-          message: 'Invalid media request or missing contentId'
+    });
+    
+    vjsPlayer.on('loadeddata', () => {
+      logVideoJSEvent('LOADEDDATA', vjsPlayer);
+      logPlayer('VJS', '📦 Data loaded');
+    });
+    
+    vjsPlayer.on('canplay', () => {
+      logVideoJSEvent('CANPLAY', vjsPlayer);
+      logPlayer('VJS', '✅ Can start playing');
+    });
+    
+    vjsPlayer.on('canplaythrough', () => {
+      logVideoJSEvent('CANPLAYTHROUGH', vjsPlayer);
+      logPlayer('VJS', '✅ Can play through without buffering');
+    });
+    
+    vjsPlayer.on('waiting', () => {
+      logVideoJSEvent('WAITING', vjsPlayer);
+      logPlayer('VJS', '⏳ Waiting for data...');
+    });
+    
+    vjsPlayer.on('pause', () => {
+      logVideoJSEvent('PAUSE', vjsPlayer);
+      logPlayer('VJS', '⏸️ Video paused');
+    });
+    
+    vjsPlayer.on('ended', () => {
+      logVideoJSEvent('ENDED', vjsPlayer);
+      logPlayer('VJS', '⏹️ Video ended');
+    });
+    
+    vjsPlayer.on('error', (error) => {
+      logVideoJSEvent('ERROR', vjsPlayer);
+      logPlayer('ERROR', '🔴 VideoJS error:', vjsPlayer.error());
+    });
+    
+    vjsPlayer.on('stalled', () => {
+      logVideoJSEvent('STALLED', vjsPlayer);
+      logPlayer('VJS', '⚠️ Playback stalled');
+    });
+    
+    vjsPlayer.on('suspend', () => {
+      logVideoJSEvent('SUSPEND', vjsPlayer);
+      logPlayer('VJS', '💤 Loading suspended');
+    });
+    
+    vjsPlayer.on('abort', () => {
+      logVideoJSEvent('ABORT', vjsPlayer);
+      logPlayer('VJS', '❌ Loading aborted');
+    });
+    
+    vjsPlayer.on('emptied', () => {
+      logVideoJSEvent('EMPTIED', vjsPlayer);
+      logPlayer('VJS', '🗑️ Media emptied');
+    });
+    
+    vjsPlayer.on('seeking', () => {
+      logVideoJSEvent('SEEKING', vjsPlayer);
+      logPlayer('VJS', '⏩ Seeking to:', vjsPlayer.currentTime());
+    });
+    
+    vjsPlayer.on('seeked', () => {
+      logVideoJSEvent('SEEKED', vjsPlayer);
+      logPlayer('VJS', '⏩ Seek completed at:', vjsPlayer.currentTime());
+    });
+    
+    vjsPlayer.on('timeupdate', () => {
+      // Log every 10 seconds to avoid flooding
+      if (Math.floor(vjsPlayer.currentTime()) % 10 === 0 && vjsPlayer.currentTime() > 0) {
+        logPlayer('VJS', '⏱️ Time update:', {
+          currentTime: vjsPlayer.currentTime(),
+          duration: vjsPlayer.duration(),
+          percentage: ((vjsPlayer.currentTime() / vjsPlayer.duration()) * 100).toFixed(2) + '%'
         });
       }
-      
-      return null;
-    }
+    });
     
-    // Mobile cihaza video yükleme başladı bilgisi gönder
-    if (sendMessageToMobile) {
-      sendMessageToMobile('load_start', {
-        contentId: loadRequestData.media.contentId,
-        title: loadRequestData.media.metadata?.title || 'Unknown Title',
-        streamType: loadRequestData.media.streamType || 'BUFFERED'
-      });
-    }
-
-    // Initialize Mux Data SDK for each new video load
-    try {
-      const playerInitTime = Date.now();
-      const isLiveStream = loadRequestData.media.streamType === 'LIVE';
-      const hasCustomData = loadRequestData.media.customData;
-      
-      // Prepare Mux metadata
-      const muxMetadata = {
-        env_key: MUX_ENV_KEY,
-        player_name: 'Bitmovin Chromecast Player',
-        player_init_time: playerInitTime,
-        video_title: loadRequestData.media.metadata?.title || loadRequestData.media.metadata?.subtitle || 'Chromecast Video',
-        video_id: loadRequestData.media.contentId,
-        video_stream_type: isLiveStream ? 'live' : 'on-demand',
-        player_version: '8.206.0',
-        page_type: 'chromecast_receiver',
-        viewer_device_category: 'tv',
-        player_software_name: 'Bitmovin Player',
-        player_software_version: '8.206.0'
-      };
-
-      // Add custom metadata if available
-      if (hasCustomData) {
-        if (hasCustomData.token) {
-          muxMetadata.viewer_user_id = hasCustomData.token.substring(0, 32); // Truncate for privacy
-          muxMetadata.custom_1 = 'authenticated';
-        } else {
-          muxMetadata.custom_1 = 'anonymous';
-        }
-        
-        if (hasCustomData.drmTicket) {
-          muxMetadata.custom_2 = 'drm_protected';
-        } else {
-          muxMetadata.custom_2 = 'clear_content';
-        }
-        
-        if (hasCustomData.licenseserver) {
-          muxMetadata.custom_3 = 'license_server_used';
-        }
-      }
-
-      // Initialize or reinitialize Mux for new content
-      initChromecastMux(playerManager, {
-        debug: process.env.NODE_ENV === 'development', // Enable debug in development
-        data: muxMetadata
-      });
-      
-      console.info('Mux Data SDK initialized for new content:', {
-        title: muxMetadata.video_title,
-        type: muxMetadata.video_stream_type,
-        authenticated: muxMetadata.custom_1
-      });
-    } catch (error) {
-      console.error('Failed to initialize Mux Data SDK:', error);
-    }
-
-    const playURL = loadRequestData.media.contentId;
-    const contentType = loadRequestData.media.contentType;
-
-    const hasDRM = true
+    vjsPlayer.on('ratechange', () => {
+      logVideoJSEvent('RATECHANGE', vjsPlayer);
+      logPlayer('VJS', '⚡ Playback rate changed:', vjsPlayer.playbackRate());
+    });
     
-      
-    try {
-      if (!player) {
-        throw new Error("Player instance is not initialized.");
+    vjsPlayer.on('volumechange', () => {
+      logVideoJSEvent('VOLUMECHANGE', vjsPlayer);
+      logPlayer('VJS', '🔊 Volume changed:', { volume: vjsPlayer.volume(), muted: vjsPlayer.muted() });
+    });
+    
+    vjsPlayer.on('durationchange', () => {
+      logVideoJSEvent('DURATIONCHANGE', vjsPlayer);
+      logPlayer('VJS', '⏱️ Duration changed:', vjsPlayer.duration());
+    });
+    
+    vjsPlayer.on('progress', () => {
+      const buffered = vjsPlayer.buffered();
+      if (buffered.length > 0) {
+        logPlayer('VJS', '📊 Buffer progress:', {
+          bufferedEnd: buffered.end(buffered.length - 1),
+          duration: vjsPlayer.duration()
+        });
       }
-      player.unload();
-      const playerSource = {
-        dash: undefined,
-        hls: undefined,
-        smooth: undefined,
-        drm: undefined
-      };
-      if (contentType && contentType.includes('dash')) {
-        playerSource.dash = playURL;
-      } else if (contentType && contentType.includes('hls')) {
-        playerSource.hls = playURL;
-      } else if (contentType && contentType.includes('smooth') || contentType && contentType.includes('ism')) {
-        playerSource.smooth = playURL;
-      } else {
-        playerSource.dash = playURL;
-        playerSource.hls = playURL;
-      }
+    });
 
-      if (hasDRM) {
-        const drmToken = loadRequestData.media.customData?.drmtoken || "";
-        
-        playerSource.drm = {
-          widevine: {
-            LA_URL: loadRequestData.media.customData.licenseserver,
-            headers: {
-              'X-CB-Ticket': loadRequestData.media.customData.drmTicket,
-              'Authorization': drmToken,
-              'Content-Type': 'application/octet-stream',
-            },
-            withCredentials: false,
-            prepareLicense: function(license) {
-              console.info('widevine drm license: ' + license);
-              return license;
-            },
-            prepareMessage: function(keyMessage) {
-              console.info('Widevine drm message: ' + JSON.stringify(keyMessage));
-              return keyMessage.message;
-            },
-            robustness: {
-              video: 'SW_SECURE_DECODE',
-              audio: 'SW_SECURE_CRYPTO'
+    const initializeEME = () => {
+      return new Promise((resolve, reject) => {
+        logPlayer('EME', 'Waiting for player ready state...');
+        vjsPlayer.ready(() => {
+          logPlayer('EME', 'Player is ready, checking EME plugin...');
+          if (typeof vjsPlayer.eme === 'function') {
+            logPlayer('EME', '✅ EME plugin found, initializing...');
+            try {
+              vjsPlayer.eme();
+              logPlayer('EME', '✅ EME plugin initialized successfully');
+              resolve(true);
+            } catch (error) {
+              logPlayer('ERROR', '🔴 EME initialization error:', error);
+              reject(error);
             }
-          },
-          playready: {
-            LA_URL: loadRequestData.media.customData.licenseserver,
-            headers: {
-              'X-CB-Ticket': loadRequestData.media.customData.drmTicket,
-              'Authorization': drmToken,
-              // 'Content-Type': 'text/xml',
-            },
-            utf8message: true,
-            plaintextChallenge: true,
-            prepareMessage: function(keyMessage) {
-              console.info('Playready drm message: ' + JSON.stringify(keyMessage));
-              return keyMessage.message;
+          } else {
+            logPlayer('ERROR', '🔴 EME plugin is missing!');
+            reject(new Error('EME initialization failed'));
+          }
+        });
+      });
+    };
+
+    const initializePlayer = async () => {
+      try {
+        await initializeEME();
+        console.log('EME initialized successfully');
+
+        player.current = vjsPlayer;
+        const playerInstance = player.current;
+        const LICENSE_REQUEST_TIMEOUT = 10000;
+
+        logPlayer('CAST', 'Setting up LOAD message interceptor...');
+        playerManager.setMessageInterceptor(
+          cast.framework.messages.MessageType.LOAD,
+          async (loadRequestData) => {
+            logPlayer('CAST', '📱 LOAD request received from mobile device');
+            logLoadRequest(loadRequestData);
+
+            if (!loadRequestData?.media?.contentUrl) {
+              logPlayer('ERROR', '🔴 Invalid media request or missing contentUrl');
+              logPlayer('ERROR', 'Received media object:', loadRequestData?.media);
+              return null;
+            }
+
+            setCastingData(loadRequestData);
+            logPlayer('CAST', 'Casting data saved to state');
+
+            const playURL = loadRequestData.media.contentUrl;
+            const contentType = loadRequestData.media.contentType;
+            const mediaDuration = loadRequestData?.media?.duration || 0;
+            const rawSeekTime = loadRequestData?.currentTime || 0;
+            
+            // Determine if currentTime is in milliseconds or seconds
+            // If currentTime > duration, it's likely in milliseconds
+            let requestedSeekTime;
+            if (rawSeekTime > mediaDuration && mediaDuration > 0) {
+              // currentTime is in milliseconds, convert to seconds
+              requestedSeekTime = rawSeekTime / 1000;
+              logPlayer('SEEK', `⏩ Detected milliseconds format: ${rawSeekTime}ms → ${requestedSeekTime}s`);
+            } else {
+              // currentTime is already in seconds
+              requestedSeekTime = rawSeekTime;
+              logPlayer('SEEK', `⏩ Detected seconds format: ${requestedSeekTime}s`);
+            }
+            
+            const hasDRM = !!(
+              loadRequestData.media.customData?.licenseServerURL &&
+              loadRequestData.media.customData?.mediaId &&
+              loadRequestData.media.customData?.drmTicket
+            );
+            
+            logPlayer('CAST', 'Content info:', { playURL, contentType, hasDRM, rawSeekTime, requestedSeekTime, mediaDuration });
+            
+            if (hasDRM) {
+              logDRMInfo(loadRequestData.media.customData);
+            }
+
+            try {
+              if (!player.current) {
+                throw new Error("Player instance is not initialized.");
+              }
+
+              playerInstance.pause();
+
+              if (!hasDRM) {
+                logPlayer('PLAYBACK', 'Setting up non-DRM content');
+                playerInstance.src({ src: playURL, type: contentType });
+                logPlayer('PLAYBACK', '✅ Non-DRM source set');
+                
+                // Seek to requested time after metadata is loaded
+                if (requestedSeekTime > 0) {
+                  logPlayer('SEEK', `⏩ Non-DRM content - Will seek to ${requestedSeekTime}s after metadata loads`);
+                  playerInstance.one('loadedmetadata', () => {
+                    if (playerInstance.duration() > 0 && requestedSeekTime < playerInstance.duration()) {
+                      logPlayer('SEEK', `🎬 Seeking to ${requestedSeekTime}s (duration: ${playerInstance.duration()}s)`);
+                      playerInstance.currentTime(requestedSeekTime);
+                    } else {
+                      logPlayer('SEEK', `⚠️ Cannot seek: seekTime=${requestedSeekTime}s, duration=${playerInstance.duration()}s`);
+                    }
+                  });
+                }
+              } else {
+                logPlayer('DRM', '🔐 Setting up DRM content...');
+                const drmInfo = `${loadRequestData.media.customData.licenseServerURL}?contentId=${loadRequestData.media.customData.mediaId}`;
+                const drmTicket = loadRequestData.media.customData.drmTicket;
+                let pendingRequests = new Set();
+                
+                logPlayer('DRM', 'DRM Info URL:', drmInfo);
+                logPlayer('DRM', 'DRM Ticket (first 50 chars):', drmTicket?.substring(0, 50) + '...');
+                
+                const keySystemConfig = {
+                  'com.widevine.alpha': {
+                    videoRobustness: 'SW_SECURE_DECODE',
+                    audioRobustness: 'SW_SECURE_CRYPTO',
+                    persistentState: 'optional',
+                    distinctiveIdentifier: 'optional',
+                    getLicense: async (emeOptions, keyMessage, callback) => {
+                      logPlayer('DRM', '🔑 Starting DRM license request...');
+                      logPlayer('DRM', 'EME Options:', emeOptions);
+                      logPlayer('DRM', 'Key Message length:', keyMessage?.byteLength);
+                      
+                      // Create unique request identifier
+                      const requestId = Date.now().toString();
+                      pendingRequests.add(requestId);
+                      logPlayer('DRM', `📤 License request ${requestId} started`);
+                      logPlayer('DRM', 'Pending requests:', Array.from(pendingRequests));
+
+                      // Create abort controller for timeout
+                      const abortController = new AbortController();
+                      const timeoutId = setTimeout(() => {
+                        logPlayer('DRM', `⏰ License request ${requestId} timed out after ${LICENSE_REQUEST_TIMEOUT}ms`);
+                        abortController.abort();
+                        pendingRequests.delete(requestId);
+                        callback(new Error('License request timeout'));
+                      }, LICENSE_REQUEST_TIMEOUT);
+
+                      try {
+                        logPlayer('DRM', `🌐 Fetching license from: ${drmInfo}`);
+                        const response = await fetch(drmInfo, {
+                          method: 'POST',
+                          headers: {
+                            'Authorization': `Bearer ${drmTicket}`,
+                            'Content-Type': 'application/octet-stream',
+                            'Accept': 'application/base64'
+                          },
+                          body: keyMessage,
+                          signal: abortController.signal,
+                          redirect: 'follow',
+                        });
+
+                        clearTimeout(timeoutId);
+                        pendingRequests.delete(requestId);
+                        
+                        logPlayer('DRM', `📥 License response received for request ${requestId}:`, {
+                          status: response.status,
+                          statusText: response.statusText,
+                          headers: Object.fromEntries(response.headers.entries())
+                        });
+
+                        if (!response.ok) {
+                          const errorText = await response.text();
+                          logPlayer('ERROR', `🔴 License request failed:`, { status: response.status, errorText });
+                          throw new Error(`License request failed: ${response.status} - ${errorText}`);
+                        }
+
+                        const license = await response.arrayBuffer();
+                        logPlayer('DRM', `✅ License received successfully for request ${requestId}:`, {
+                          byteLength: license.byteLength
+                        });
+                        if (!license || license.byteLength === 0) {
+                          logPlayer('ERROR', '🔴 Received empty license from server');
+                          throw new Error('Received empty license from server');
+                        }
+
+                        callback(null, license);
+                      } catch (error) {
+                        clearTimeout(timeoutId);
+                        pendingRequests.delete(requestId);
+                        
+                        if (error.name === 'AbortError') {
+                          logPlayer('ERROR', `⏰ License request ${requestId} timed out`);
+                        } else {
+                          logPlayer('ERROR', `🔴 License request ${requestId} failed:`, {
+                            name: error.name,
+                            message: error.message,
+                            stack: error.stack
+                          });
+                        }
+                        
+                        if (pendingRequests.size === 0) {
+                          try {
+                            logPlayer('DRM', '🔄 Attempting license request retry...');
+                            const retryResponse = await fetch(drmInfo, {
+                              method: 'POST',
+                              headers: {
+                                'Authorization': `Bearer ${drmTicket}`,
+                                'Content-Type': 'application/octet-stream'
+                              },
+                              body: keyMessage,
+                              redirect: 'follow',
+                            });
+                            
+                            logPlayer('DRM', 'Retry response:', {
+                              status: retryResponse.status,
+                              statusText: retryResponse.statusText
+                            });
+
+                            if (!retryResponse.ok) {
+                              throw new Error(`Retry failed: ${retryResponse.status}`);
+                            }
+
+                            const retryLicense = await retryResponse.arrayBuffer();
+                            logPlayer('DRM', 'Retry license size:', retryLicense.byteLength);
+                            if (!retryLicense || retryLicense.byteLength === 0) {
+                              throw new Error('Retry received empty license');
+                            }
+
+                            logPlayer('DRM', '✅ License retry successful');
+                            callback(null, retryLicense);
+                          } catch (retryError) {
+                            logPlayer('ERROR', '🔴 License retry failed:', {
+                              name: retryError.name,
+                              message: retryError.message
+                            });
+                            callback(retryError);
+                          }
+                        } else {
+                          logPlayer('DRM', 'Other pending requests exist, not retrying');
+                          callback(error);
+                        }
+                      }
+                    }
+                  }
+                };
+
+                logPlayer('DRM', '🔧 Applying DRM configuration...');
+                logPlayer('DRM', 'Key system config:', JSON.stringify(Object.keys(keySystemConfig)));
+                playerInstance.src({
+                  src: playURL,
+                  type: contentType,
+                  keySystems: keySystemConfig
+                });
+                logPlayer('DRM', '✅ DRM source set');
+
+                // Seek to requested time after metadata is loaded for DRM content
+                if (requestedSeekTime > 0) {
+                  logPlayer('SEEK', `⏩ DRM content - Will seek to ${requestedSeekTime}s after metadata loads`);
+                  playerInstance.one('loadedmetadata', () => {
+                    if (playerInstance.duration() > 0 && requestedSeekTime < playerInstance.duration()) {
+                      logPlayer('SEEK', `🎬 DRM content - Seeking to ${requestedSeekTime}s (duration: ${playerInstance.duration()}s)`);
+                      playerInstance.currentTime(requestedSeekTime);
+                    } else {
+                      logPlayer('SEEK', `⚠️ DRM content - Cannot seek: seekTime=${requestedSeekTime}s, duration=${playerInstance.duration()}s`);
+                    }
+                  });
+                }
+
+                playerInstance.on('emeError', (error) => {
+                  logPlayer('ERROR', '🔴 EME error occurred:', {
+                    error: error,
+                    message: error?.message,
+                    code: error?.code
+                  });
+                  logPlayer('DRM', '🔄 Attempting to recover from EME error...');
+                  playerInstance.src({
+                    src: playURL,
+                    type: contentType,
+                    keySystems: keySystemConfig
+                  });
+                });
+                
+                let playbackTimeout = null;
+                playerInstance.on('waiting', () => {
+                  logPlayer('PLAYBACK', '⏳ Playback waiting, starting recovery timer...');
+                  if (playbackTimeout) clearTimeout(playbackTimeout);
+                  playbackTimeout = setTimeout(() => {
+                    if (playerInstance.readyState() < 3) {
+                      logPlayer('PLAYBACK', '⚠️ Playback stalled (readyState < 3), attempting recovery...');
+                      logPlayer('PLAYBACK', 'Current readyState:', playerInstance.readyState());
+                      playerInstance.src({
+                        src: playURL,
+                        type: contentType,
+                        keySystems: keySystemConfig
+                      });
+                    } else {
+                      logPlayer('PLAYBACK', '✅ Playback recovered, readyState:', playerInstance.readyState());
+                    }
+                  }, 10000);
+                });
+
+                playerInstance.on('playing', () => {
+                  logPlayer('PLAYBACK', '▶️ DRM content playing');
+                  if (playbackTimeout) {
+                    clearTimeout(playbackTimeout);
+                    playbackTimeout = null;
+                    logPlayer('PLAYBACK', 'Recovery timer cleared');
+                  }
+                  setShowBranding(false);
+                });
+              }
+              
+
+              logPlayer('CAST', '✅ LOAD request processing complete');
+              return loadRequestData;
+            } catch (error) {
+              logPlayer('ERROR', '🔴 Error setting up content:', {
+                name: error.name,
+                message: error.message,
+                stack: error.stack
+              });
+              setShowBranding(true);
+              return null;
             }
           }
-        };
-      }
-
-      console.log("Loading source with config:", playerSource);
-      
-      try {
-        if (loadRequestData.media.customData?.token) {
-          setMultiplayState({
-            token: loadRequestData.media.customData.token
-          });
-        }
+        );
         
-        await player.load(playerSource);
-        console.info("Bitmovin player source loaded successfully");
+        // Add additional Cast message interceptors for detailed logging
+        logPlayer('CAST', 'Setting up additional message interceptors...');
         
-        // Mobile cihaza video yükleme başarılı bilgisi gönder
-        if (sendMessageToMobile) {
-          sendMessageToMobile('load_success', {
-            contentId: loadRequestData.media.contentId,
-            title: loadRequestData.media.metadata?.title || 'Unknown Title',
-            duration: player.getDuration()
-          });
-        }
+        playerManager.setMessageInterceptor(
+          cast.framework.messages.MessageType.PLAY,
+          (requestData) => {
+            logPlayer('CAST', '📱 PLAY request received from mobile:', requestData);
+            return requestData;
+          }
+        );
         
-        player.play();
-        return loadRequestData;
+        playerManager.setMessageInterceptor(
+          cast.framework.messages.MessageType.PAUSE,
+          (requestData) => {
+            logPlayer('CAST', '📱 PAUSE request received from mobile:', requestData);
+            return requestData;
+          }
+        );
+        
+        playerManager.setMessageInterceptor(
+          cast.framework.messages.MessageType.STOP,
+          (requestData) => {
+            logPlayer('CAST', '📱 STOP request received from mobile:', requestData);
+            return requestData;
+          }
+        );
+        
+        playerManager.setMessageInterceptor(
+          cast.framework.messages.MessageType.SEEK,
+          (requestData) => {
+            logPlayer('CAST', '📱 SEEK request received from mobile:', {
+              currentTime: requestData?.currentTime,
+              resumeState: requestData?.resumeState
+            });
+            return requestData;
+          }
+        );
+        
+        playerManager.setMessageInterceptor(
+          cast.framework.messages.MessageType.SET_VOLUME,
+          (requestData) => {
+            logPlayer('CAST', '📱 SET_VOLUME request received from mobile:', requestData?.volume);
+            return requestData;
+          }
+        );
+        
+        playerManager.setMessageInterceptor(
+          cast.framework.messages.MessageType.MEDIA_STATUS,
+          (requestData) => {
+            logPlayer('CAST', '📱 MEDIA_STATUS request:', requestData);
+            return requestData;
+          }
+        );
+        
       } catch (error) {
-        console.error("Error loading source:", error);
-        setShowBranding(true);
-        
-        // Mobile cihaza video yükleme hatası bilgisi gönder
-        if (sendMessageToMobile) {
-          sendMessageToMobile('load_error', {
-            error: 'source_load_failed',
-            message: error.message || 'Error loading video source',
-            contentId: loadRequestData.media.contentId
-          });
-        }
-        
-        return null;
-      }
-    } catch (error) {
-      console.error("Error setting up content:", error);
-      setShowBranding(true);
-      
-      // Mobile cihaza genel hata bilgisi gönder
-      if (sendMessageToMobile) {
-        sendMessageToMobile('load_error', {
-          error: 'setup_failed',
-          message: error.message || 'Error setting up content'
+        logPlayer('ERROR', '🔴 Failed to initialize player:', {
+          name: error.name,
+          message: error.message,
+          stack: error.stack
         });
       }
-      
-      return null;
-    }
-  };
+    };
+
+    initializePlayer();
+
+    return () => {
+      logPlayer('CLEANUP', '🧹 Cleaning up player...');
+      if (player.current) {
+        logPlayer('CLEANUP', 'Disposing VideoJS player instance');
+        player.current.dispose();
+      }
+    };
+  }, [playerManager, context]); 
 
   return (
     <div
@@ -514,8 +642,9 @@ const Player = ({ userData, message, bitmovinPlayerRef, sendMessageToMobile }) =
         position: 'relative',
       }}
     >
-      <div
-        ref={playerElementRef}
+      <video
+        ref={videoNode}
+        className="video-js vjs-default-skin vjs-big-play-centered vjs-fluid"
         style={{
           width: '100%',
           height: '100%',
@@ -524,6 +653,10 @@ const Player = ({ userData, message, bitmovinPlayerRef, sendMessageToMobile }) =
           left: 0,
           zIndex: 1,
         }}
+        x-webkit-airplay="allow"
+        webkit-playsinline="true"
+        playsInline
+        encrypted-media="true"
       />
       {showBranding && (
         <div

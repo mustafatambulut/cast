@@ -1,65 +1,47 @@
 /* global cast */
-import React, { useEffect, useState,useRef } from 'react';
+import React, { useEffect, useState } from 'react';
 import Player from './Player';
 import './styles.css';
 
 let context; 
 
+// Detailed logging helper functions
+const logWithTimestamp = (category, message, data = null) => {
+  const timestamp = new Date().toISOString();
+  const logPrefix = `[${timestamp}] [${category}]`;
+  if (data) {
+    console.log(`${logPrefix} ${message}`, data);
+  } else {
+    console.log(`${logPrefix} ${message}`);
+  }
+};
+
+const logEventDetails = (eventName, event) => {
+  logWithTimestamp('EVENT', `========== ${eventName} ==========`);
+  logWithTimestamp('EVENT', 'Event Type:', event?.type);
+  logWithTimestamp('EVENT', 'Event Data:', event?.data);
+  logWithTimestamp('EVENT', 'Sender ID:', event?.senderId);
+  logWithTimestamp('EVENT', 'Full Event Object:', JSON.stringify(event, null, 2));
+  logWithTimestamp('EVENT', `========== END ${eventName} ==========`);
+};
+
+const logMobileData = (source, data) => {
+  logWithTimestamp('MOBILE_DATA', `========== Data from ${source} ==========`);
+  logWithTimestamp('MOBILE_DATA', 'Data Type:', typeof data);
+  logWithTimestamp('MOBILE_DATA', 'Is Array:', Array.isArray(data));
+  logWithTimestamp('MOBILE_DATA', 'Raw Data:', data);
+  if (typeof data === 'object' && data !== null) {
+    logWithTimestamp('MOBILE_DATA', 'Object Keys:', Object.keys(data));
+    Object.entries(data).forEach(([key, value]) => {
+      logWithTimestamp('MOBILE_DATA', `  ${key}:`, value);
+    });
+  }
+  logWithTimestamp('MOBILE_DATA', `========== END Data from ${source} ==========`);
+};
+
 const App = () => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [userData, setUserData] = useState({});
-  const [message,setMessage] = useState(null)
-  const bitmovinPlayerRef = useRef(null);
-  const [paused,setPaused] = useState(false);
-
-  // Mobile cihaza mesaj gönderme fonksiyonu
-  const sendMessageToMobile = (messageType, data) => {
-    if (context) {
-      const messageData = {
-        type: messageType,
-        timestamp: Date.now(),
-        receiverId: context.getApplicationData()?.applicationId || 'chromecast_receiver',
-        ...data
-      };
-      
-      console.log('📤 Sending message to mobile:', messageData);
-      
-      // Ana namespace'e mesaj gönder
-      try {
-        context.sendCustomMessage('urn:x-cast:com.todtv.tod', undefined, messageData);
-        console.log('✅ Message sent successfully to main namespace');
-      } catch (error) {
-        console.error('❌ Error sending message to main namespace:', error);
-      }
-      
-      // Alternatif namespace'lere de gönder
-      const alternativeNamespaces = [
-        'urn:x-cast:com.todtv.tod',
-        'urn:x-cast:com.todtv',
-        'urn:x-cast:com.tod'
-      ];
-      
-      alternativeNamespaces.forEach(namespace => {
-        try {
-          context.sendCustomMessage(namespace, undefined, messageData);
-          console.log(`✅ Message sent to alternative namespace: ${namespace}`);
-        } catch (error) {
-          console.error(`❌ Error sending message to ${namespace}:`, error);
-        }
-      });
-    } else {
-      console.warn('⚠️ Cast context not available for sending message');
-    }
-  };
-  
-  // Test mesajı gönderme fonksiyonu (geliştirme amaçlı)
-  const sendTestMessage = () => {
-    sendMessageToMobile('receiver_status', {
-      status: 'ready',
-      capabilities: ['video_playback', 'pause_resume', 'seek'],
-      version: '1.0.0'
-    });
-  };
 
   useEffect(() => {
     // Log if Cast SDK is available
@@ -80,56 +62,61 @@ const App = () => {
         Object.getOwnPropertyNames(Object.getPrototypeOf(context)).join(', '));
       
       // Monitor system-level CUSTOM_MESSAGE events - this catches ALL custom messages
-      console.log("Setting up system-level custom message monitoring...");
+      logWithTimestamp('CAST', 'Setting up system-level custom message monitoring...');
       context.addEventListener(cast.framework.system.EventType.CUSTOM_MESSAGE, (event) => {
-        console.log('🔍 SYSTEM CUSTOM_MESSAGE event:', event);
+        logEventDetails('SYSTEM_CUSTOM_MESSAGE', event);
         
         if (event.data) {
-          console.log('🔍 Message namespace:', event.data.namespace);
-          console.log('🔍 Message content:', event.data.message);
+          logWithTimestamp('CAST', '🔍 Message namespace:', event.data.namespace);
+          logWithTimestamp('CAST', '🔍 Message content:', event.data.message);
+          logWithTimestamp('CAST', '🔍 Message sender:', event.senderId);
           
           // Log if this is our target namespace
           if (event.data.namespace === 'urn:x-cast:com.todtv.tod.extendsession') {
-            console.log('✅ CONFIRMED: Message received on target namespace!');
+            logWithTimestamp('CAST', '✅ CONFIRMED: Message received on target namespace!');
             
             // Try to process this message
             try {
               const messageData = typeof event.data.message === 'string' 
                 ? JSON.parse(event.data.message) 
                 : event.data.message;
-                
-              console.log('Parsed system message data:', messageData);
+              
+              logMobileData('SYSTEM_CUSTOM_MESSAGE', messageData);
               setUserData(messageData); // Update state with this data
             } catch (error) {
-              console.error('Error parsing system message:', error);
+              logWithTimestamp('ERROR', 'Error parsing system message:', error);
             }
           } else {
-            console.log('⚠️ Message received on different namespace:', event.data.namespace);
+            logWithTimestamp('CAST', '⚠️ Message received on different namespace:', event.data.namespace);
           }
         }
       });
       
       // Add listener for our custom namespace with enhanced logging
-      console.log("Adding custom message listener...");
+      logWithTimestamp('CAST', 'Adding custom message listener for: urn:x-cast:com.todtv.tod.extendsession');
       context.addCustomMessageListener('urn:x-cast:com.todtv.tod.extendsession', (event) => {
-        console.log("Full event object:", event);
-        console.log("Sender ID:", event.senderId);
-        console.log("Data type:", typeof event.data);
-        console.log("Raw data:", event.data);
+        logEventDetails('CUSTOM_MESSAGE_EXTENDSESSION', event);
+        logWithTimestamp('MOBILE_DATA', '📱 Mobile device sent data on extendsession namespace');
+        logWithTimestamp('MOBILE_DATA', 'Sender ID:', event.senderId);
+        logWithTimestamp('MOBILE_DATA', 'Data type:', typeof event.data);
+        logWithTimestamp('MOBILE_DATA', 'Raw data:', event.data);
+        logWithTimestamp('MOBILE_DATA', 'Data length:', typeof event.data === 'string' ? event.data.length : 'N/A');
   
         try {
           // Only parse if the data is a string
           if (typeof event.data === 'string') {
             const user = JSON.parse(event.data);
-            console.log("📌 Parsed user data:", user);
+            logMobileData('PARSED_USER_DATA', user);
             setUserData(user);
           } else {
             // If data is not a string, use it directly
-            console.log("📌 Using data directly (not a string)");
+            logWithTimestamp('MOBILE_DATA', '📌 Using data directly (not a string)');
+            logMobileData('DIRECT_USER_DATA', event.data);
             setUserData(event.data);
           }
         } catch (error) {
-          console.error("Error parsing message data:", error);
+          logWithTimestamp('ERROR', 'Error parsing message data:', error);
+          logWithTimestamp('ERROR', 'Error stack:', error.stack);
         }
       });
 
@@ -141,116 +128,78 @@ const App = () => {
       ];
       
       alternativeNamespaces.forEach(namespace => {
-        console.log(`Registering listener for alternative namespace: ${namespace}`);
+        logWithTimestamp('CAST', `Registering listener for alternative namespace: ${namespace}`);
         context.addCustomMessageListener(namespace, (event) => {
-          console.log(`Message received on alternative namespace - App.js [${namespace}]:`, event);
-          setMessage("Mobilden gelen mesaj : ",event)
-          if(event.data.type==='playback_state'){
-            console.log('Playback state change requested. Current paused state:', paused);
-            console.log('Player current state:', {
-              isPaused: bitmovinPlayerRef.current?.isPaused(),
-              isPlaying: bitmovinPlayerRef.current?.isPlaying(),
-              hasSource: bitmovinPlayerRef.current?.getSource() !== null
-            });
-            
-            if(bitmovinPlayerRef.current){
-              if(bitmovinPlayerRef.current.isPaused() || !bitmovinPlayerRef.current.isPlaying()){
-                console.log('Playing video...');
-                bitmovinPlayerRef.current.play().then(() => {
-                  console.log('Video play started successfully');
-                  setPaused(false);
-                  
-                  // Mobile cihaza oynatma durumu bilgisi gönder
-                  sendMessageToMobile('video_status', {
-                    status: 'playing',
-                    currentTime: bitmovinPlayerRef.current.getCurrentTime(),
-                    duration: bitmovinPlayerRef.current.getDuration()
-                  });
-                }).catch(error => {
-                  console.error('Error playing video:', error);
-                  
-                  // Mobile cihaza hata bilgisi gönder
-                  sendMessageToMobile('video_error', {
-                    error: 'play_failed',
-                    message: error.message
-                  });
-                });
-              } else {
-                console.log('Pausing video...');
-                bitmovinPlayerRef.current.pause();
-                setPaused(true);
-                
-                // Mobile cihaza duraklatma durumu bilgisi gönder
-                sendMessageToMobile('video_status', {
-                  status: 'paused',
-                  currentTime: bitmovinPlayerRef.current.getCurrentTime(),
-                  duration: bitmovinPlayerRef.current.getDuration()
-                });
-              }
-            } else {
-              console.warn('Player reference not available');
-              
-              // Mobile cihaza hata bilgisi gönder
-              sendMessageToMobile('video_error', {
-                error: 'player_not_available',
-                message: 'Player reference not available'
-              });
-            }
-          }
-
-          if(event.data.type==='time_update'){
-       
-            const currentTime = event.data.currentTime;
-            const offsetInSeconds = currentTime /1000
-            const newTime = bitmovinPlayerRef.current.getCurrentTime()+offsetInSeconds
-            const duration = bitmovinPlayerRef.current.getDuration()
-            const safeTime = Math.min(Math.max(newTime,0),duration)
-            bitmovinPlayerRef.current.seek(safeTime);
-          }
+          logEventDetails(`ALT_NAMESPACE_${namespace}`, event);
+          logWithTimestamp('MOBILE_DATA', `📱 Mobile device sent data on alternative namespace: ${namespace}`);
           
           try {
             const data = typeof event.data === 'string' 
               ? JSON.parse(event.data) 
               : event.data;
-              
-            console.log(`Parsed data from ${namespace}:`, data);
+            
+            logMobileData(`ALT_NAMESPACE_${namespace}`, data);
             setUserData(data);
           } catch (error) {
-            console.error(`Error parsing data from ${namespace}:`, error);
+            logWithTimestamp('ERROR', `Error parsing data from ${namespace}:`, error);
           }
         });
       });
 
       // Add system event listeners for debugging
       context.addEventListener(cast.framework.system.EventType.READY, (event) => {
-         console.log('Cast system READY event received:', event);
-         console.log('Receiver is now ready for connections');
-         
-         // Mobile cihaza receiver hazır bilgisi gönder
-         sendMessageToMobile('receiver_ready', {
-           status: 'ready',
-           timestamp: Date.now(),
-           capabilities: ['video_playback', 'pause_resume', 'seek', 'volume_control']
-         });
-       });
+        logEventDetails('CAST_SYSTEM_READY', event);
+        logWithTimestamp('CAST', '🟢 Receiver is now ready for connections');
+        logWithTimestamp('CAST', 'Application ID:', context.getApplicationData()?.appId);
+      });
       
       context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, (event) => {
-        console.log('SENDER_CONNECTED event:', event);
-        console.log('Sender connected. ID:', event.senderId);
-        console.log('Waiting for messages on namespace: urn:x-cast:com.todtv.tod.extendsession');
+        logEventDetails('SENDER_CONNECTED', event);
+        logWithTimestamp('CAST', '📱 Sender connected. ID:', event.senderId);
+        logWithTimestamp('CAST', 'User Agent:', event.userAgent);
+        logWithTimestamp('CAST', 'Waiting for messages on namespace: urn:x-cast:com.todtv.tod.extendsession');
         
-        // Log all connected senders
+        // Log all connected senders with details
         const senders = context.getSenders();
-        console.log('👥 All connected senders:', senders.map(s => s.id));
+        logWithTimestamp('CAST', '👥 Total connected senders:', senders.length);
+        senders.forEach((sender, index) => {
+          logWithTimestamp('CAST', `  Sender ${index + 1}:`, {
+            id: sender.id,
+            userAgent: sender.userAgent,
+            transport: sender.transport
+          });
+        });
+      });
+      
+      context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, (event) => {
+        logEventDetails('SENDER_DISCONNECTED', event);
+        logWithTimestamp('CAST', '📴 Sender disconnected. ID:', event.senderId);
+        logWithTimestamp('CAST', 'Reason:', event.reason);
       });
       
       context.addEventListener(cast.framework.system.EventType.ERROR, (event) => {
-        console.error('Cast ERROR event:', event);
+        logEventDetails('CAST_ERROR', event);
+        logWithTimestamp('ERROR', '🔴 Cast error occurred:', event);
+      });
+      
+      context.addEventListener(cast.framework.system.EventType.SHUTDOWN, (event) => {
+        logEventDetails('CAST_SHUTDOWN', event);
+        logWithTimestamp('CAST', '⏹️ Cast session shutdown');
+      });
+      
+      context.addEventListener(cast.framework.system.EventType.STANDBY_CHANGED, (event) => {
+        logEventDetails('STANDBY_CHANGED', event);
+        logWithTimestamp('CAST', '💤 Standby state changed:', event.isStandby);
+      });
+      
+      context.addEventListener(cast.framework.system.EventType.VISIBILITY_CHANGED, (event) => {
+        logEventDetails('VISIBILITY_CHANGED', event);
+        logWithTimestamp('CAST', '👁️ Visibility changed:', event.isVisible);
       });
 
       try {
         // Start the context with detailed options and explicit namespace registration
-        context.start({
+        const startOptions = {
           customNamespaces: {
             'urn:x-cast:com.todtv.tod.extendsession': 'JSON',
             'urn:x-cast:com.todtv.tod': 'JSON',
@@ -260,86 +209,144 @@ const App = () => {
           statusText: 'Ready to receive cast content',
           maxInactivity: 60000,  // Longer timeout for debugging
           disableIdleTimeout: true  // Prevent timing out during debugging
-        });
-        console.log("Cast Receiver Context started");
-        console.log("Is system ready:", context.isSystemReady);
+        };
+        logWithTimestamp('CAST', 'Starting Cast Receiver Context with options:', startOptions);
+        context.start(startOptions);
+        logWithTimestamp('CAST', '✅ Cast Receiver Context started successfully');
+        logWithTimestamp('CAST', 'Is system ready:', context.isSystemReady);
+        logWithTimestamp('CAST', 'Device capabilities:', context.getDeviceCapabilities());
 
         const playerManager = context.getPlayerManager();
-        console.log("Player manager obtained:", !!playerManager);
+        logWithTimestamp('CAST', 'Player manager obtained:', !!playerManager);
 
+        // Add comprehensive player manager event listeners
         playerManager.addEventListener(
           cast.framework.events.EventType.PLAYING,
-          () => {
-            console.log("Video playback started");
+          (event) => {
+            logEventDetails('PLAYER_PLAYING', event);
+            logWithTimestamp('PLAYER', '▶️ Video playback started');
             setIsPlaying(true);
           }
         );
 
         playerManager.addEventListener(
           cast.framework.events.EventType.IDLE,
-          () => {
-            console.log("Video playback stopped or no media loaded");
+          (event) => {
+            logEventDetails('PLAYER_IDLE', event);
+            logWithTimestamp('PLAYER', '⏸️ Video playback stopped or no media loaded');
+            logWithTimestamp('PLAYER', 'Idle reason:', event?.idleReason);
             setIsPlaying(false);
           }
         );
+        
+        playerManager.addEventListener(
+          cast.framework.events.EventType.PAUSE,
+          (event) => {
+            logEventDetails('PLAYER_PAUSE', event);
+            logWithTimestamp('PLAYER', '⏸️ Video paused');
+          }
+        );
+        
+        playerManager.addEventListener(
+          cast.framework.events.EventType.BUFFERING,
+          (event) => {
+            logEventDetails('PLAYER_BUFFERING', event);
+            logWithTimestamp('PLAYER', '🔄 Video buffering:', event?.isBuffering);
+          }
+        );
+        
+        playerManager.addEventListener(
+          cast.framework.events.EventType.ERROR,
+          (event) => {
+            logEventDetails('PLAYER_ERROR', event);
+            logWithTimestamp('ERROR', '🔴 Player error:', event?.detailedErrorCode);
+          }
+        );
+        
+        playerManager.addEventListener(
+          cast.framework.events.EventType.MEDIA_STATUS,
+          (event) => {
+            logWithTimestamp('PLAYER', '📊 Media status update:', {
+              playerState: event?.mediaStatus?.playerState,
+              currentTime: event?.mediaStatus?.currentTime,
+              duration: event?.mediaStatus?.media?.duration
+            });
+          }
+        );
+        
+        playerManager.addEventListener(
+          cast.framework.events.EventType.REQUEST_SEEK,
+          (event) => {
+            logEventDetails('PLAYER_REQUEST_SEEK', event);
+            logWithTimestamp('PLAYER', '⏩ Seek requested to:', event?.requestData?.currentTime);
+          }
+        );
+        
+        playerManager.addEventListener(
+          cast.framework.events.EventType.REQUEST_LOAD,
+          (event) => {
+            logEventDetails('PLAYER_REQUEST_LOAD', event);
+            logWithTimestamp('PLAYER', '📥 Load requested');
+            if (event?.requestData?.media) {
+              logMobileData('LOAD_REQUEST_MEDIA', event.requestData.media);
+            }
+          }
+        );
+        
+        playerManager.addEventListener(
+          cast.framework.events.EventType.REQUEST_STOP,
+          (event) => {
+            logEventDetails('PLAYER_REQUEST_STOP', event);
+            logWithTimestamp('PLAYER', '⏹️ Stop requested');
+          }
+        );
+        
+        playerManager.addEventListener(
+          cast.framework.events.EventType.REQUEST_PAUSE,
+          (event) => {
+            logEventDetails('PLAYER_REQUEST_PAUSE', event);
+            logWithTimestamp('PLAYER', '⏸️ Pause requested');
+          }
+        );
+        
+        playerManager.addEventListener(
+          cast.framework.events.EventType.REQUEST_PLAY,
+          (event) => {
+            logEventDetails('PLAYER_REQUEST_PLAY', event);
+            logWithTimestamp('PLAYER', '▶️ Play requested');
+          }
+        );
+        
+        playerManager.addEventListener(
+          cast.framework.events.EventType.REQUEST_VOLUME_CHANGE,
+          (event) => {
+            logEventDetails('PLAYER_REQUEST_VOLUME_CHANGE', event);
+            logWithTimestamp('PLAYER', '🔊 Volume change requested:', event?.requestData?.volume);
+          }
+        );
+        
       } catch (error) {
-        console.error("Error starting Cast Receiver Context:", error);
+        logWithTimestamp('ERROR', 'Error starting Cast Receiver Context:', error);
+        logWithTimestamp('ERROR', 'Error stack:', error.stack);
       }
     } else {
       if (typeof cast === 'undefined') {
-        console.error("Cast is undefined - SDK not loaded");
+        logWithTimestamp('ERROR', '❌ Cast is undefined - SDK not loaded');
       } else if (!cast.framework) {
-        console.error("Cast framework is not available");
+        logWithTimestamp('ERROR', '❌ Cast framework is not available');
       } 
     }
     
     // Return cleanup function
     return () => {
-      console.log("Component unmounting, cleanup...");
+      logWithTimestamp('CAST', '🧹 Component unmounting, cleanup...');
       // Additional cleanup if needed
     };
   }, []);
   
-  // Progress bilgilerini düzenli olarak mobil cihaza gönder
-  useEffect(() => {
-    let progressInterval;
-    
-    if (isPlaying && bitmovinPlayerRef.current) {
-      progressInterval = setInterval(() => {
-        if (bitmovinPlayerRef.current && !bitmovinPlayerRef.current.isPaused()) {
-          const currentTime = bitmovinPlayerRef.current.getCurrentTime();
-          const duration = bitmovinPlayerRef.current.getDuration();
-          const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
-          
-          // RemoteMediaClient için progress bilgisi gönder
-          sendMessageToMobile('media_progress', {
-            currentTime: currentTime,
-            duration: duration,
-            progress: progress,
-            isPlaying: !bitmovinPlayerRef.current.isPaused(),
-            timestamp: Date.now(),
-            // Android RemoteMediaClient için ek bilgiler
-            mediaInfo: {
-              currentTime: Math.floor(currentTime * 1000), // milisaniye cinsinden
-              duration: Math.floor(duration * 1000), // milisaniye cinsinden
-              playbackRate: 1.0,
-              playerState: bitmovinPlayerRef.current.isPaused() ? 'PAUSED' : 'PLAYING'
-            }
-          });
-        }
-      }, 1000); // Her saniye güncelle
-    }
-    
-    return () => {
-      if (progressInterval) {
-        clearInterval(progressInterval);
-      }
-    };
-  }, [isPlaying, sendMessageToMobile]);
-
   return (
     <div>
-      <Player userData={userData} message={message} bitmovinPlayerRef={bitmovinPlayerRef} sendMessageToMobile={sendMessageToMobile} />
+      <Player userData={userData} />
     </div>
   );
 };
