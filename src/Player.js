@@ -287,7 +287,7 @@ const Player = ({ userData }) => {
             setCastingData(loadRequestData);
             logPlayer('CAST', 'Casting data saved to state');
 
-            const playURL = loadRequestData.media.contentUrl;
+            let playURL = loadRequestData.media.contentUrl;
             const contentType = loadRequestData.media.contentType;
             const mediaDuration = loadRequestData?.media?.duration || 0;
             const rawSeekTime = loadRequestData?.currentTime || 0;
@@ -295,7 +295,27 @@ const Player = ({ userData }) => {
             // Determine if currentTime is in milliseconds or seconds
             // If currentTime > duration, it's likely in milliseconds
             let requestedSeekTime;
-            if (rawSeekTime > mediaDuration && mediaDuration > 0) {
+            if (loadRequestData.media?.customData?.watchFromStart === true) {
+              requestedSeekTime = 0;
+              logPlayer('SEEK', '⏩ watchFromStart is true, forcing seek to 0s');
+              
+              // Remove start/end parameters from URL to force playback from beginning
+              if (playURL && playURL.includes('?')) {
+                try {
+                  const urlParts = playURL.split('?');
+                  const baseUrl = urlParts[0];
+                  const params = new URLSearchParams(urlParts[1]);
+                  params.delete('start');
+                  params.delete('end');
+                  playURL = params.toString() ? `${baseUrl}?${params.toString()}` : baseUrl;
+                  logPlayer('SEEK', '✅ Removed start/end parameters from manifest URL');
+                  logPlayer('SEEK', 'Modified URL:', playURL);
+                } catch (error) {
+                  logPlayer('ERROR', '⚠️ Failed to modify URL, using original:', error);
+                  playURL = loadRequestData.media.contentUrl;
+                }
+              }
+            } else if (rawSeekTime > mediaDuration && mediaDuration > 0) {
               // currentTime is in milliseconds, convert to seconds
               requestedSeekTime = rawSeekTime / 1000;
               logPlayer('SEEK', `⏩ Detected milliseconds format: ${rawSeekTime}ms → ${requestedSeekTime}s`);
